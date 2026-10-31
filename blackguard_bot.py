@@ -70,6 +70,11 @@ CMD_PING = ".ping"
 CMD_UPTIME = ".uptime"
 CMD_ID = ".id"
 
+# Команда признания / предложения встречаться
+CMD_ASKOUT = ".askout"
+CMD_PROPOSAL = ".proposal"
+CMD_LOVEASK = ".loveask"
+
 # Игры
 CMD_GAME_DICE = ".dice"
 CMD_GAME_BASKET = ".basket"
@@ -109,7 +114,7 @@ GAME_EMOJI = {
     "bowling": "🎳", "football": "⚽",
 }
 
-# Только effect_id, эмодзи больше не нужно для сообщения
+# Эффекты Telegram
 FX = {
     "fire":      "5104841245755180586",
     "confetti":  "5046509860389126442",
@@ -501,16 +506,6 @@ def list_banwords(bc_id: str) -> list[str]:
     ).fetchall()
     conn.close()
     return [r["word"] for r in rows]
-
-
-def message_has_banword(bc_id: str, text: str) -> str | None:
-    if not text:
-        return None
-    low = text.lower()
-    for w in list_banwords(bc_id):
-        if w in low:
-            return w
-    return None
 
 
 def add_reminder(owner_id: int, text: str, due_ts: int) -> int:
@@ -931,6 +926,23 @@ async def on_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     parts = data.split(":")
     kind = parts[0]
 
+    # --- Ответы на предложение (Да / Нет) ---
+    if kind == "love_ask":
+        answer = parts[1]
+        if answer == "yes":
+            await safe_edit(
+                q,
+                "💖 <b>Спасибо!</b> 💕💕💕",
+                reply_markup=None
+            )
+        elif answer == "no":
+            await safe_edit(
+                q,
+                "Ладно...",
+                reply_markup=None
+            )
+        return
+
     if kind == "p":
         section = parts[1]
         bc_id = parts[2] if len(parts) > 2 else None
@@ -1302,6 +1314,7 @@ ALL_OWNER_CMDS = [
     CMD_NOTE_ADD, CMD_NOTE_LIST, CMD_NOTE_DEL,
     CMD_BANWORD_ADD, CMD_BANWORD_LIST, CMD_BANWORD_DEL,
     CMD_QUIET_START, CMD_QUIET_STOP, CMD_STATS, CMD_PING, CMD_UPTIME, CMD_ID,
+    CMD_ASKOUT, CMD_PROPOSAL, CMD_LOVEASK,
     CMD_GAME_DICE, CMD_GAME_BASKET, CMD_GAME_DARTS, CMD_GAME_BOWLING, CMD_GAME_FOOTBALL,
     CMD_LOVE, CMD_COMPLIMENT, CMD_QUOTE, CMD_FACT, CMD_TIP, CMD_ROAST,
     CMD_FX_FIRE, CMD_FX_CONFETTI, CMD_FX_HEART, CMD_FX_POO, CMD_FX_BOOM,
@@ -1323,7 +1336,7 @@ async def handle_owner_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if not is_any_cmd and not is_start_panel:
         return
 
-    async def reply(txt: str, effect_id: str | None = None) -> None:
+    async def reply(txt: str, effect_id: str | None = None, reply_markup=None) -> None:
         s = get_settings(bc_id)
         await _typing(context, bc_id, chat_id, min(s.get("typing_delay_ms") or 1500, 800))
         kwargs = dict(
@@ -1332,6 +1345,8 @@ async def handle_owner_command(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         if effect_id:
             kwargs["message_effect_id"] = effect_id
+        if reply_markup:
+            kwargs["reply_markup"] = reply_markup
         try:
             await context.bot.send_message(**kwargs)
         except BadRequest as e:
@@ -1368,6 +1383,29 @@ async def handle_owner_command(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             await reply(h("⚠️", "Не удалось отправить панель")
                         + "\nНапишите /start боту в личку.")
+        return
+
+    # ── Команда предложения встречаться (.askout / .proposal / .loveask) ─────
+    if any(_is_cmd(lowered, c) for c in (CMD_ASKOUT, CMD_PROPOSAL, CMD_LOVEASK)):
+        await _safe_delete(context, bc_id, msg.message_id)
+        
+        proposal_text = (
+            "✨ <b>Знаешь...</b> ✨\n"
+            "━━━━━━━━━━━━━━━\n"
+            "Знаешь, ты действительно очень важный и дорогой для меня человек, "
+            "и я тебя очень сильно люблю... ❤️\n\n"
+            "Ты не против стать моей девушкой и начать встречаться? 🥺👉👈"
+        )
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Да 💕", callback_data="love_ask:yes"),
+                InlineKeyboardButton("Нет 💔", callback_data="love_ask:no")
+            ]
+        ])
+        
+        # Отправляем сообщение с эффектом сердечек
+        await reply(proposal_text, effect_id=FX["heart"], reply_markup=keyboard)
         return
 
     # ── Анимации ──────────────────────────────────────────────────────
@@ -1418,7 +1456,6 @@ async def handle_owner_command(update: Update, context: ContextTypes.DEFAULT_TYP
         if _is_cmd(lowered, cmd_key):
             content = stripped[len(cmd_key):].strip()
             effect_id = FX[fx_name]
-            # Без смайлика в начале. Если текста нет — просто название эффекта.
             text_out = html.escape(content) if content else f"<b>{html.escape(fx_name)}</b>"
             await reply(text_out, effect_id)
             await _safe_delete(context, bc_id, msg.message_id)
@@ -1637,6 +1674,9 @@ def build_help_text(bc_id: str | None) -> str:
     return (
         h("🛡", f"Команды {BOT_NAME}") + "\n"
         "<i>Все команды пишутся в бизнес-чате и автоматически удаляются после обработки.</i>\n\n"
+
+        "<b>❤️ Признание</b>\n"
+        f"• {code(CMD_ASKOUT)} (или {code(CMD_PROPOSAL)}) — красивое признание в любви с кнопками «Да/Нет»\n\n"
 
         "<b>🔹 Основные</b>\n"
         f"• {code(CMD_AWAY)} — включить автоответчик («не на связи»)\n"
